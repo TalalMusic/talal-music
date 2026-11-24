@@ -1,0 +1,10 @@
+{
+  "name": "TALAL MUSIC",
+  "short_name": "TALAL MUSIC",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#07140e",
+  "theme_color": "#07140e",
+  "description": "Your personal music discovery app",
+  "icons": []
+}
