@@ -8,13 +8,18 @@
 <body>
 <header><div class="brand">TALAL <span>MUSIC</span></div><div class="tag">YOUR MUSIC. YOUR WORLD.</div></header>
 <main>
-<section class="hero"><p class="eyebrow">WELCOME TO YOUR MUSIC WORLD</p><h1>Find your next<br><em>favourite song.</em></h1><p class="muted">A personal music space for every mood.</p>
+<section class="hero"><p class="eyebrow">WELCOME TO YOUR MUSIC WORLD</p><h1>Find your next<br><em>favourite song.</em></h1><p class="muted">Play your own music. Build your library.</p>
 <div class="search"><span>⌕</span><input id="search" placeholder="Search songs, artists, albums..."></div></section>
 <section><div class="section-head"><h2>Explore genres</h2><span>8 categories</span></div><div class="genres" id="genres"></div></section>
-<section><div class="section-head"><h2>Popular picks</h2><span>Song directory preview</span></div><div id="songs" class="song-list"></div></section>
-<section class="note"><b>Streaming note</b><p>Song titles are discovery examples. Audio is not embedded yet. A licensed provider or official player must be connected before songs can stream here.</p></section>
+<section><div class="section-head"><h2>Your music library</h2><span id="trackCount">0 songs</span></div>
+<div class="upload-row"><label class="upload-btn">＋ Add music files<input id="filePicker" type="file" accept="audio/*" multiple hidden></label><span class="muted small">MP3, M4A, WAV and other phone/computer audio files</span></div>
+<div id="songs" class="song-list"><p class="muted">Add music files from your device to start listening.</p></div></section>
+<section class="player" id="player"><div class="player-art">♫</div><div class="player-info"><b id="nowTitle">Nothing playing</b><small id="nowArtist">Choose a song from your library</small><input id="seek" type="range" min="0" max="100" value="0"></div>
+<div class="controls"><button id="prev" aria-label="Previous">|◀</button><button id="play" class="play" aria-label="Play">▶</button><button id="next" aria-label="Next">▶|</button></div>
+<div class="time"><span id="elapsed">0:00</span><span id="duration">0:00</span></div></section>
+<section class="note"><b>Your music, your control</b><p>Audio files are played directly from the device you select them on. They are not uploaded to this website or shared with friends. Only use music you own or have permission to play.</p></section>
 </main>
-<nav><a class="active" href="#">⌂<small>Home</small></a><a href="#genres">◈<small>Explore</small></a><a href="#songs">♫<small>Songs</small></a><a href="#about">♡<small>Library</small></a></nav>
-<footer id="about">TALAL MUSIC · Personal music discovery</footer>
-<script src="app.js"></script>
+<nav><a class="active" href="#">⌂<small>Home</small></a><a href="#genres">◈<small>Explore</small></a><a href="#songs">♫<small>Songs</small></a><a href="#player">♡<small>Player</small></a></nav>
+<footer>TALAL MUSIC · Personal music player</footer>
+<audio id="audio"></audio><script src="app.js"></script>
 </body></html>
