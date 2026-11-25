@@ -1,6 +1,7 @@
 'use strict';
 const $=id=>document.getElementById(id), audio=$('audio'), API='https://talal-music-api.mirzatalalahmad001.workers.dev/', STORE='talal-music-v5-library', TTL=29*86400000;
-let data={favorites:[],playlists:[],recent:[],shuffle:false,repeat:'off',auto:true}, local=[],results=[],queue=[],shuffled=new Set(),index=-1,current=null,activePlaylist='',pending=0,searchToken=0,searchController,yt=null,ytReady=false,ytLoading=null,videoVisible=false,videoObserver=null,videoToken=0,installPrompt=null,dbPromise;
+let data={favorites:[],playlists:[],recent:[],shuffle:false,repeat:'off',auto:true}, local=[],results=[],queue=[],shuffled=new Set(),index=-1,current=null,activePlaylist='',pending=0,searchToken=0,searchController,yt=null,ytReady=false,ytLoading=null,videoVisible=false,videoObserver=null,videoToken=0,installPrompt=null,dbPromise, audioOwner=0, endHandled=0, autoPlan=null;
+const audioLookups=new Map(), STREAM_FRESH=60*60*1000;
 const key=t=>t.source+':'+t.id, valid=t=>t&&typeof t.id==='string'&&['Local','YouTube','Jamendo','Audius'].includes(t.source), fresh=t=>valid(t)&&(t.source==='Local'||Date.now()-Number(t.checked)<TTL), time=s=>Number.isFinite(s)?Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0'):'0:00';
 const elem=(tag,text,cls)=>{const x=document.createElement(tag);if(text!==undefined)x.textContent=text;if(cls)x.className=cls;return x};
 function safeURL(v){try{const u=new URL(v);return u.protocol==='https:'?u.href:''}catch{return ''}}
@@ -32,18 +33,86 @@ $('searchForm').onsubmit=e=>{e.preventDefault();search($('query').value,selected
 const genres=[['🇵🇰','Pakistani','Pakistani songs official music'],['🇮🇳','Indian','Bollywood Hindi songs official music'],['🇬🇧','English','English pop official music'],['🇸🇦','Arabic','Arabic songs official music'],['♫','Qawwali','Qawwali official'],['☪','Islamic / Nasheeds','Islamic nasheeds official'],['♪','Punjabi','Punjabi songs official music'],['🇹🇷','Turkish','Turkish songs official music']];for(const [icon,name,q] of genres){const b=button('',()=>{const provider=selectedSource();const query=provider==='YouTube'?q:name;$('query').value=query;search(query,provider)});b.className='genre';b.append(elem('span',icon),document.createTextNode(name));$('genres').append(b)}
 function loadYT(){if(window.YT?.Player)return Promise.resolve();if(!ytLoading)ytLoading=new Promise((resolve,reject)=>{const s=elem('script');s.src='https://www.youtube.com/iframe_api';let timer=setTimeout(()=>{ytLoading=null;reject(Error('YouTube player could not load.'))},15000);window.onYouTubeIframeAPIReady=()=>{clearTimeout(timer);resolve()};s.onerror=()=>{clearTimeout(timer);ytLoading=null;reject(Error('YouTube player could not load.'))};document.head.append(s)});return ytLoading}
 function stopVideo(){videoToken++;videoObserver?.disconnect();videoObserver=null;videoVisible=false;ytReady=false;try{yt?.destroy()}catch{}yt=null;$('videoFrame').replaceChildren();$('videoWrap').hidden=true}
-function stop(){clearMedia();audio.pause();audio.removeAttribute('src');audio.load();stopVideo();$('play').textContent='Play'}
+function stop(){audioOwner=0;autoPlan=null;clearMedia();audio.pause();audio.removeAttribute('src');audio.load();stopVideo();$('play').textContent='Play'}
 function resetPlayer(){$('nowTitle').textContent='Choose a song';$('nowArtist').textContent='';$('nowLinks').replaceChildren();$('art').src='icon-192.png';$('sourceTag').textContent='Ready';$('playStatus').textContent='';$('audioControls').hidden=false;$('play').disabled=false}
 function record(){if(!current)return;data.recent=[snap(current),...data.recent.filter(x=>key(x)!==key(current))].slice(0,30);save();renderAll()}
 function updateNow(t){$('nowTitle').textContent=t.title;$('nowArtist').textContent=t.artist;$('sourceTag').textContent=t.source;$('art').src=safeURL(t.image)||'icon-192.png';credits($('nowLinks'),t);$('seek').value=0;$('elapsed').textContent='0:00';$('duration').textContent=time(t.duration);$('audioControls').hidden=t.source==='YouTube';$('play').disabled=t.source==='YouTube';$('play').textContent=t.source==='YouTube'?'Use video controls':'Play'}
 async function showYT(t,auto,n){await loadYT();if(n!==pending)return;const token=++videoToken;const frame=elem('iframe');frame.title='YouTube video: '+t.title;frame.src='https://www.youtube.com/embed/'+t.id+'?enablejsapi=1&playsinline=1&autoplay=0&origin='+encodeURIComponent(location.origin);frame.allow='autoplay; encrypted-media; picture-in-picture; fullscreen';frame.allowFullscreen=true;frame.referrerPolicy='strict-origin-when-cross-origin';$('videoFrame').append(frame);$('videoWrap').hidden=false;let wantAuto=auto;const maybeAuto=()=>{if(wantAuto&&ytReady&&videoVisible&&!document.hidden){wantAuto=false;try{yt.playVideo()}catch{}}};videoObserver=new IntersectionObserver(([e])=>{if(token!==videoToken)return;videoVisible=e.intersectionRatio>0.5;if(!videoVisible&&ytReady){try{yt.pauseVideo()}catch{}}maybeAuto()},{threshold:[0,.51,1]});videoObserver.observe(frame);yt=new YT.Player(frame,{events:{onReady:()=>{if(token!==videoToken)return;ytReady=true;maybeAuto()},onStateChange:e=>{if(token!==videoToken)return;if(e.data===1){if(document.hidden||!videoVisible){try{yt.pauseVideo()}catch{}return}record()}if(e.data===0&&data.auto&&videoVisible&&!document.hidden)advance(1,true)},onError:()=>{$('playStatus').textContent='This video is unavailable here. Use Watch on YouTube or choose another track.'},onAutoplayBlocked:()=>{$('playStatus').textContent='Tap the YouTube player to continue.'}}});$('videoWrap').scrollIntoView({block:'center'});}
-async function playAt(i,auto=false){if(i<0||i>=queue.length)return;const n=++pending;stop();index=i;shuffled.add(i);current=queue[i];updateNow(current);$('playStatus').textContent='Loading…';try{let t=current;if(t.source==='Local'){t=local.find(x=>key(x)===key(t));if(!t)throw Error('Local file is unavailable. Add it again.')}else{const d=await fetchData(t.source==='YouTube'?'video':t.source==='Audius'?'audius-track':'track',{id:t.id});if(n!==pending)return;t=mapTrack(d.results[0]||{},current.source);if(!t)throw Error('This track is no longer available.');replaceSaved(t);queue[i]=t;}if(n!==pending)return;current=t;updateNow(t);$('playStatus').textContent='';if(t.source==='YouTube'){if(!t.embeddable||t.madeForKids!==false){$('playStatus').textContent='This video cannot be embedded here. Use Watch on YouTube.';return}await showYT(t,auto,n)}else{if(!t.url||t.source==='Jamendo'&&!t.license)throw Error('No licensed audio stream available.');audio.src=t.url;await audio.play().catch(()=>{$('playStatus').textContent='Tap Play to start audio.'})}}catch(e){if(n===pending)$('playStatus').textContent=e.message||'Playback unavailable.'}}
-function start(list,i){queue=list.slice();shuffled=new Set();playAt(i);$('player').scrollIntoView({block:'start'})}
-function advance(d,automatic=false){if(!queue.length||index<0)return;if(automatic&&data.repeat==='one'){playAt(index,true);return}let n=index+d;if(data.shuffle&&queue.length>1){let choices=queue.map((_,i)=>i).filter(i=>i!==index&&!shuffled.has(i));if(!choices.length){if(automatic&&data.repeat==='off'){$('playStatus').textContent='End of shuffled queue.';return}shuffled=new Set([index]);choices=queue.map((_,i)=>i).filter(i=>i!==index)}n=choices[Math.floor(Math.random()*choices.length)]}else if(n<0||n>=queue.length){if(data.repeat==='all'||!automatic)n=(n+queue.length)%queue.length;else{$('playStatus').textContent='End of queue.';return}}playAt(n,automatic||current?.source==='YouTube')}
-$('prev').onclick=()=>advance(-1);$('next').onclick=()=>advance(1);$('closeVideo').onclick=()=>{pending++;stopVideo();$('playStatus').textContent='Video closed. Select a track to reopen.'};$('play').onclick=()=>{if(!current){const list=local.length?local:results;if(list.length)start(list,0);return}if(current.source==='YouTube')return;if(!audio.getAttribute('src')){playAt(index);return}if(audio.paused)audio.play().catch(()=>{$('playStatus').textContent='Playback could not start.'});else audio.pause()};audio.onplay=()=>{$('play').textContent='Pause';setMedia();record()};audio.onpause=()=>{$('play').textContent='Play';if('mediaSession' in navigator&&current?.source!=='YouTube')navigator.mediaSession.playbackState='paused'};audio.onended=()=>{if(data.auto)advance(1,true)};audio.onerror=()=>{if(audio.getAttribute('src'))$('playStatus').textContent='Audio unavailable. Try another track.'};audio.ontimeupdate=()=>{if(Number.isFinite(audio.duration)&&audio.duration>0){$('seek').value=audio.currentTime/audio.duration*100;$('elapsed').textContent=time(audio.currentTime);$('duration').textContent=time(audio.duration)}};$('seek').oninput=()=>{if(Number.isFinite(audio.duration))audio.currentTime=Number($('seek').value)/100*audio.duration};
-document.addEventListener('visibilitychange',()=>{if(document.hidden&&ytReady){try{yt.pauseVideo()}catch{}}});
-function prefs(){$('shuffle').textContent='Shuffle '+(data.shuffle?'on':'off');$('shuffle').setAttribute('aria-pressed',String(data.shuffle));$('repeat').textContent='Repeat '+data.repeat;$('repeat').setAttribute('aria-pressed',String(data.repeat!=='off'));$('autoNext').checked=data.auto}
-$('shuffle').onclick=()=>{data.shuffle=!data.shuffle;shuffled=new Set(index>=0?[index]:[]);save();prefs()};$('repeat').onclick=()=>{data.repeat={off:'all',all:'one',one:'off'}[data.repeat];save();prefs()};$('autoNext').onchange=e=>{data.auto=e.target.checked;save()};
+// Search results already contain provider-approved stream URLs. Keep them only
+// in memory, and resolve saved tracks ahead of time without downloading audio.
+function readyAudio(t){
+  if(!t)return null;
+  if(t.source==='Local')return local.find(x=>key(x)===key(t))||null;
+  if(!['Audius','Jamendo'].includes(t.source)||!safeURL(t.url)||Date.now()-Number(t.checked)>=STREAM_FRESH||!Number.isFinite(Number(t.checked))||t.source==='Jamendo'&&!t.license)return null;
+  return t;
+}
+function resolveAudio(t){
+  const ready=readyAudio(t);if(ready)return Promise.resolve(ready);
+  if(t.source==='Local')return Promise.reject(Error('Local file is unavailable. Add it again.'));
+  const k=key(t);if(audioLookups.has(k))return audioLookups.get(k);
+  const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),15000);
+  const task=fetchData(t.source==='Audius'?'audius-track':'track',{id:t.id},controller.signal).then(d=>{
+    if(d.source!==t.source)throw Error('Unexpected provider response.');
+    const resolved=mapTrack(d.results[0]||{},t.source);
+    if(!resolved||resolved.id!==t.id||!readyAudio(resolved))throw Error('No licensed audio stream available.');
+    return resolved;
+  }).finally(()=>{clearTimeout(timeout);audioLookups.delete(k)});
+  audioLookups.set(k,task);return task;
+}
+function chooseNext(d,automatic){
+  if(!queue.length||index<0)return {i:-1};
+  if(automatic&&data.repeat==='one')return {i:index};
+  let i=index+d,reset=false;
+  if(data.shuffle&&queue.length>1){
+    let choices=queue.map((_,j)=>j).filter(j=>j!==index&&!shuffled.has(j));
+    if(!choices.length){if(automatic&&data.repeat==='off')return {i:-1,reason:'End of shuffled queue.'};reset=true;choices=queue.map((_,j)=>j).filter(j=>j!==index)}
+    i=choices[Math.floor(Math.random()*choices.length)];
+  }else if(i<0||i>=queue.length){if(data.repeat==='all'||!automatic)i=(i+queue.length)%queue.length;else return {i:-1,reason:'End of queue.'}}
+  return {i,reset};
+}
+function prepareNext(){
+  if(!data.auto||!current||current.source==='YouTube'||data.repeat==='one')return;
+  if(!autoPlan)autoPlan=chooseNext(1,true);
+  const i=autoPlan.i,t=queue[i],list=queue;
+  if(!t||t.source==='YouTube'||t.source==='Local'||readyAudio(t))return;
+  resolveAudio(t).then(resolved=>{if(queue===list&&queue[i]&&key(queue[i])===key(resolved))queue[i]=resolved}).catch(()=>{});
+}
+function syncLoop(){audio.loop=Boolean(data.auto&&data.repeat==='one'&&current&&current.source!=='YouTube')}
+async function playAt(i,auto=false){
+  if(i<0||i>=queue.length)return;
+  const n=++pending;audioOwner=0;autoPlan=null;index=i;shuffled.add(i);current=queue[i];
+  // Keep the same HTML audio element and media session across audio tracks.
+  // Do not pause/load/clear the session between already resolved audio tracks.
+  if(current.source==='YouTube'){stop();}else if(yt||!$('videoWrap').hidden){stopVideo();}
+  updateNow(current);$('playStatus').textContent='Loading…';syncLoop();
+  try{
+    let t=current;
+    if(t.source==='YouTube'){
+      const d=await fetchData('video',{id:t.id});if(n!==pending)return;
+      t=mapTrack(d.results[0]||{},'YouTube');if(!t||t.id!==current.id)throw Error('This track is no longer available.');
+      replaceSaved(t);queue[i]=t;current=t;updateNow(t);$('playStatus').textContent='';
+      if(!t.embeddable||t.madeForKids!==false){$('playStatus').textContent='This video cannot be embedded here. Use Watch on YouTube.';return}
+      await showYT(t,auto,n);return;
+    }
+    const ready=readyAudio(t);
+    if(ready)t=ready;
+    else{audio.pause();t=await resolveAudio(t);if(n!==pending)return;}
+    if(n!==pending)return;
+    queue[i]=t;current=t;updateNow(t);syncLoop();
+    audioOwner=n;audio.src=t.url;
+    // No network lookup or asynchronous work before play() on a ready track.
+    const playing=audio.play();
+    if(!ready&&t.source!=='Local')replaceSaved(t);
+    try{await playing;}catch(e){if(n===pending)$('playStatus').textContent=e.name==='NotAllowedError'?'Tap Play to continue audio.':'Audio unavailable. Tap Next or try another track.'}
+  }catch(e){if(n===pending)$('playStatus').textContent=e.name==='AbortError'?'Music service took too long. Try again.':e.message||'Playback unavailable.'}
+}
+function start(list,i){queue=list.slice();shuffled=new Set();autoPlan=null;playAt(i);$('player').scrollIntoView({block:'start'})}
+function advance(d,automatic=false){const plan=automatic&&autoPlan?autoPlan:chooseNext(d,automatic);autoPlan=null;if(plan.i<0){if(plan.reason)$('playStatus').textContent=plan.reason;return}if(plan.reset)shuffled=new Set([index]);playAt(plan.i,automatic||current?.source==='YouTube')}
+function handleEnded(){if(!audio.ended||audioOwner!==pending||endHandled===pending||current?.source==='YouTube')return;endHandled=pending;if(data.auto)advance(1,true)}
+$('prev').onclick=()=>advance(-1);$('next').onclick=()=>advance(1);$('closeVideo').onclick=()=>{pending++;stopVideo();$('playStatus').textContent='Video closed. Select a track to reopen.'};$('play').onclick=()=>{if(!current){const list=local.length?local:results;if(list.length)start(list,0);return}if(current.source==='YouTube')return;if(audioOwner!==pending||!audio.getAttribute('src')){playAt(index);return}if(audio.paused)audio.play().catch(()=>{$('playStatus').textContent='Playback could not start.'});else audio.pause()};audio.onplay=()=>{if(audioOwner!==pending||current?.source==='YouTube')return;$('play').textContent='Pause';setMedia();record();prepareNext()};audio.onplaying=()=>{if(audioOwner===pending){$('playStatus').textContent='';setMedia();prepareNext()}};audio.onwaiting=()=>{if(audioOwner===pending&&!audio.paused)$('playStatus').textContent='Buffering audio…'};audio.onpause=()=>{$('play').textContent='Play';if('mediaSession' in navigator&&current?.source!=='YouTube')navigator.mediaSession.playbackState='paused'};audio.onended=handleEnded;audio.onerror=()=>{if(audioOwner===pending&&audio.getAttribute('src'))$('playStatus').textContent='Audio unavailable. Try another track.'};audio.ontimeupdate=()=>{if(Number.isFinite(audio.duration)&&audio.duration>0){$('seek').value=audio.currentTime/audio.duration*100;$('elapsed').textContent=time(audio.currentTime);$('duration').textContent=time(audio.duration)}};$('seek').oninput=()=>{if(Number.isFinite(audio.duration))audio.currentTime=Number($('seek').value)/100*audio.duration};
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&ytReady){try{yt.pauseVideo()}catch{}}else if(!document.hidden)handleEnded()});
+function prefs(){$('shuffle').textContent='Shuffle '+(data.shuffle?'on':'off');$('shuffle').setAttribute('aria-pressed',String(data.shuffle));$('repeat').textContent='Repeat '+data.repeat;$('repeat').setAttribute('aria-pressed',String(data.repeat!=='off'));$('autoNext').checked=data.auto;syncLoop()}
+$('shuffle').onclick=()=>{data.shuffle=!data.shuffle;shuffled=new Set(index>=0?[index]:[]);autoPlan=null;save();prefs();prepareNext()};$('repeat').onclick=()=>{data.repeat={off:'all',all:'one',one:'off'}[data.repeat];autoPlan=null;save();prefs();prepareNext()};$('autoNext').onchange=e=>{data.auto=e.target.checked;autoPlan=null;save();syncLoop();prepareNext()};
 $('clearData').onclick=async()=>{if(!confirm('Delete all local files, favorites, playlists and history from this app?'))return;pending++;stop();try{await transact('readwrite',s=>s.clear())}catch{$('playStatus').textContent='Could not clear stored files; clear browser site data manually.';return}local.forEach(t=>URL.revokeObjectURL(t.url));local=[];queue=[];results=[];current=null;index=-1;data={favorites:[],playlists:[],recent:[],shuffle:false,repeat:'off',auto:true};localStorage.removeItem(STORE);resetPlayer();renderAll();prefs()};
 window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e});$('install').onclick=async()=>{if(installPrompt){await installPrompt.prompt();installPrompt=null;return}alert('Android / Chrome: menu ⋮ → Install app or Add to Home screen. iPhone: Safari → Share → Add to Home Screen. Desktop: browser install menu. If already installed, open TALAL MUSIC from your home screen.')};
 if('serviceWorker' in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});prefs();renderAll();loadLocal();setInterval(()=>{prune();renderAll()},3600000);
